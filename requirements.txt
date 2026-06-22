@@ -1,0 +1,4 @@
+python-telegram-bot==21.7
+anthropic==0.42.0
+flask==3.1.0
+gunicorn==23.0.0
