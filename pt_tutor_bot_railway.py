@@ -1,8 +1,15 @@
 """
-🇧🇷 Бот-репетитор бразильского португальского -2
-Версия 3 FIXED — с правильной инициализацией Application
+🇧🇷 Бот-репетитор бразильского португальского
+Версия Universal — поддержка Claude AND ChatGPT
 
-Требует: pip install python-telegram-bot anthropic flask gunicorn
+Требует: pip install python-telegram-bot anthropic openai flask gunicorn
+
+ПРОВАЙДЕРЫ:
+- claude (дешевый Haiku)
+- openai (дешевый gpt-3.5-turbo)
+
+Чтобы переключиться, установи переменную окружения:
+PROVIDER=claude  или  PROVIDER=openai
 """
 
 import os
@@ -10,7 +17,6 @@ import json
 import asyncio
 import threading
 from pathlib import Path
-from anthropic import Anthropic
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -23,16 +29,40 @@ from flask import Flask, request
 # ═══════════════════════════════════════════════════════════
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
+PROVIDER = os.getenv("PROVIDER", "claude").lower()  # claude или openai
 PORT = int(os.getenv("PORT", 8080))
-
-if not TELEGRAM_TOKEN or not ANTHROPIC_API_KEY:
-    print("⚠️  ОШИБКА: Установи TELEGRAM_TOKEN и ANTHROPIC_API_KEY!")
-    exit(1)
-
-client = Anthropic(api_key=ANTHROPIC_API_KEY)
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 MEMORY_FILE = "user_memory.json"
+
+# ═══════════════════════════════════════════════════════════
+# ПРОВАЙДЕРЫ ИИ
+# ═══════════════════════════════════════════════════════════
+
+# 🔵 CLAUDE PROVIDER
+if PROVIDER == "claude":
+    from anthropic import Anthropic
+    API_KEY = os.getenv("ANTHROPIC_API_KEY")
+    if not API_KEY:
+        raise ValueError("❌ Установи ANTHROPIC_API_KEY для Claude!")
+    ai_client = Anthropic(api_key=API_KEY)
+    MODEL = "claude-3-5-haiku-20241022"  # Дешевая модель Claude
+    print(f"🔵 Claude режим (модель: {MODEL})")
+
+# 🟢 OPENAI PROVIDER
+elif PROVIDER == "openai":
+    from openai import OpenAI
+    API_KEY = os.getenv("OPENAI_API_KEY")
+    if not API_KEY:
+        raise ValueError("❌ Установи OPENAI_API_KEY для OpenAI!")
+    ai_client = OpenAI(api_key=API_KEY)
+    MODEL = "gpt-3.5-turbo"  # Дешевая модель OpenAI
+    print(f"🟢 OpenAI режим (модель: {MODEL})")
+
+else:
+    raise ValueError(f"❌ Неизвестный PROVIDER: {PROVIDER}. Используй 'claude' или 'openai'")
+
+if not TELEGRAM_TOKEN:
+    raise ValueError("❌ Установи TELEGRAM_TOKEN!")
 
 SYSTEM_PROMPT = """Você é um professor de português brasileiro para um estudante russo de nível iniciante.
 
@@ -90,32 +120,56 @@ def add_to_history(user_id: str, role: str, content: str):
     save_user_data(user_id, user_data)
 
 
-def ask_claude(user_id: str, user_message: str) -> str:
-    """СИНХРОННАЯ версия (без async) — работает в Flask"""
+# ═══════════════════════════════════════════════════════════
+# УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ЗАПРОСА К ИИ
+# ═══════════════════════════════════════════════════════════
+
+def ask_ai(user_id: str, user_message: str) -> str:
+    """
+    Универсальная функция для запроса к ИИ
+    Поддерживает Claude и OpenAI
+    """
     user_data = get_user_data(user_id)
     add_to_history(user_id, "user", user_message)
 
     try:
-        response = client.messages.create(
-            model="claude-3-5-haiku-20241022",
-            max_tokens=1000,
-            system=SYSTEM_PROMPT,
-            messages=user_data["history"]
-        )
+        if PROVIDER == "claude":
+            # ═══ CLAUDE ЗАПРОС ═══
+            response = ai_client.messages.create(
+                model=MODEL,
+                max_tokens=1000,
+                system=SYSTEM_PROMPT,
+                messages=user_data["history"]
+            )
+            reply = response.content[0].text
+            
+        elif PROVIDER == "openai":
+            # ═══ OPENAI ЗАПРОС ═══
+            # Форматируем историю для OpenAI (другой формат чем Claude)
+            messages_for_openai = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                *user_data["history"]
+            ]
+            
+            response = ai_client.chat.completions.create(
+                model=MODEL,
+                max_tokens=1000,
+                messages=messages_for_openai
+            )
+            reply = response.choices[0].message.content
 
-        reply = response.content[0].text
         add_to_history(user_id, "assistant", reply)
-        print(f"✅ Claude ответил пользователю {user_id}")
+        print(f"✅ {PROVIDER.upper()} ответил пользователю {user_id}")
         return reply
     
     except Exception as e:
-        error_msg = f"❌ Ошибка Claude API: {str(e)}"
+        error_msg = f"❌ Ошибка {PROVIDER.upper()} API: {str(e)}"
         print(f"ERROR: {error_msg}")
         return error_msg
 
 
 # ═══════════════════════════════════════════════════════════
-# КОМАНДЫ (СИНХРОННЫЕ)
+# КОМАНДЫ
 # ═══════════════════════════════════════════════════════════
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -146,7 +200,7 @@ async def vocab_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     await update.message.reply_text("⏳ Подбираю слова для тебя...")
     
-    reply = ask_claude(user_id, "/vocab — дай 5 новых слов на тему повседневной жизни")
+    reply = ask_ai(user_id, "/vocab — дай 5 новых слов на тему повседневной жизни")
     
     user_data = get_user_data(user_id)
     user_data["words_learned"] += 5
@@ -159,20 +213,20 @@ async def grammar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     await update.message.reply_text("⏳ Готовлю урок грамматики...")
     
-    reply = ask_claude(user_id, "/grammar — объясни важное правило для новичка")
+    reply = ask_ai(user_id, "/grammar — объясни важное правило для новичка")
     await update.message.reply_text(reply, parse_mode="Markdown")
 
 
 async def chat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    reply = ask_claude(user_id, "/chat — начни диалог на португальском для новичка")
+    reply = ask_ai(user_id, "/chat — начни диалог на португальском для новичка")
     await update.message.reply_text(reply, parse_mode="Markdown")
 
 
 async def quiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     await update.message.reply_text("⏳ Составляю квиз...")
-    reply = ask_claude(user_id, "/quiz — тест из 5 вопросов")
+    reply = ask_ai(user_id, "/quiz — тест из 5 вопросов")
     await update.message.reply_text(reply, parse_mode="Markdown")
 
 
@@ -215,21 +269,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "vocab":
         await query.message.reply_text("⏳ Подбираю слова...")
-        reply = ask_claude(user_id, "/vocab — 5 полезных слов")
+        reply = ask_ai(user_id, "/vocab — 5 полезных слов")
         user_data = get_user_data(user_id)
         user_data["words_learned"] += 5
         save_user_data(user_id, user_data)
         await query.message.reply_text(reply, parse_mode="Markdown")
     elif data == "grammar":
         await query.message.reply_text("⏳ Готовлю урок...")
-        reply = ask_claude(user_id, "/grammar — объясни правило")
+        reply = ask_ai(user_id, "/grammar — объясни правило")
         await query.message.reply_text(reply, parse_mode="Markdown")
     elif data == "chat":
-        reply = ask_claude(user_id, "/chat — диалог для практики")
+        reply = ask_ai(user_id, "/chat — диалог для практики")
         await query.message.reply_text(reply, parse_mode="Markdown")
     elif data == "quiz":
         await query.message.reply_text("⏳ Составляю квиз...")
-        reply = ask_claude(user_id, "/quiz — тест")
+        reply = ask_ai(user_id, "/quiz — тест")
         await query.message.reply_text(reply, parse_mode="Markdown")
     elif data == "progress":
         user_data = get_user_data(user_id)
@@ -248,7 +302,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id=update.effective_chat.id, action="typing"
     )
     
-    reply = ask_claude(user_id, text)
+    reply = ask_ai(user_id, text)
     await update.message.reply_text(reply, parse_mode="Markdown")
 
 
@@ -281,7 +335,7 @@ def init_bot_sync():
         application.add_handler(CallbackQueryHandler(button_handler))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
         
-        # 🔑 КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: инициализируем Application асинхронно
+        # 🔑 Инициализируем Application асинхронно
         loop.run_until_complete(application.initialize())
         print("✅ Application инициализирован!")
 
@@ -320,12 +374,12 @@ def webhook():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return "🤖 Bot is running!", 200
+    return f"🤖 Bot is running! (Provider: {PROVIDER.upper()})", 200
 
 
 @app.route("/", methods=["GET"])
 def index():
-    return "🇧🇷 Portuguese Tutor Bot is online!", 200
+    return f"🇧🇷 Portuguese Tutor Bot is online! (Using {PROVIDER.upper()})", 200
 
 
 if __name__ == "__main__":
