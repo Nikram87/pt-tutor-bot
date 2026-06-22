@@ -1,6 +1,6 @@
 """
 🇧🇷 Бот-репетитор бразильского португальского
-Версия 3 — ИСПРАВЛЕННАЯ для Railway webhook
+Версия 3 FIXED — с правильной инициализацией Application
 
 Требует: pip install python-telegram-bot anthropic flask gunicorn
 """
@@ -265,11 +265,10 @@ def init_bot_sync():
     """Инициализирует бота (один раз)"""
     global application, loop
     
-    if loop is None:
+    if application is None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-    
-    if application is None:
+        
         application = Application.builder().token(TELEGRAM_TOKEN).build()
         
         application.add_handler(CommandHandler("start", start))
@@ -281,6 +280,10 @@ def init_bot_sync():
         application.add_handler(CommandHandler("reset", reset_cmd))
         application.add_handler(CallbackQueryHandler(button_handler))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+        
+        # 🔑 КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: инициализируем Application асинхронно
+        loop.run_until_complete(application.initialize())
+        print("✅ Application инициализирован!")
 
 
 @app.route("/webhook", methods=["POST"])
@@ -290,13 +293,19 @@ def webhook():
         init_bot_sync()
         
         json_data = request.get_json()
+        if not json_data:
+            return "ok", 200
+            
         update = Update.de_json(json_data, application.bot)
         
         # Обработаем обновление в отдельном потоке
         def process():
-            loop.run_until_complete(application.process_update(update))
+            try:
+                loop.run_until_complete(application.process_update(update))
+            except Exception as e:
+                print(f"❌ Ошибка при обработке обновления: {e}")
         
-        thread = threading.Thread(target=process)
+        thread = threading.Thread(target=process, daemon=True)
         thread.start()
         thread.join(timeout=30)  # Максимум 30 сек на обработку
         
@@ -304,6 +313,8 @@ def webhook():
     
     except Exception as e:
         print(f"❌ Webhook ошибка: {e}")
+        import traceback
+        traceback.print_exc()
         return "error", 500
 
 
