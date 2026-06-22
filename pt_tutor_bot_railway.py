@@ -1,5 +1,5 @@
 """
-🇧🇷 Бот-репетитор бразильского португальского
+🇧🇷 Бот-репетитор бразильского португальского-2
 Версия Universal — поддержка Claude AND ChatGPT
 
 Требует: pip install python-telegram-bot anthropic openai flask gunicorn
