@@ -1,5 +1,5 @@
 """
-🇧🇷 Бот-репетитор бразильского португальского
+🇧🇷 Бот-репетитор бразильского португальского -2
 Версия 3 FIXED — с правильной инициализацией Application
 
 Требует: pip install python-telegram-bot anthropic flask gunicorn
